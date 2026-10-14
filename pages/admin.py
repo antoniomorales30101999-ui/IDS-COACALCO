@@ -86,45 +86,18 @@ def procesar_archivo(archivo):
     df['SEMANA'] = pd.to_datetime(df['FECHA CREACION']).dt.isocalendar().week
     return df
 
-# ——— FUNCIÓN: LEER Y LIMPIAR REPORTE CIERRE DIARIO ———
+# ── FUNCIÓN: LEER Y LIMPIAR REPORTE CIERRE DIARIO ─────
 def procesar_cierre(archivo):
-    try:
-        df = pd.read_excel(
-            archivo,
-            sheet_name=0,
-            header=1
-        )
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-        df = df.dropna(how='all')
-        df.columns = df.columns.astype(str).str.strip()
-        
-        # Buscar la columna 'Cuenta' sin importar si está en mayúsculas o minúsculas
-        col_cuenta = None
-        for col in df.columns:
-            if col.upper() == 'CUENTA':
-                col_cuenta = col
-                break
-                
-        if col_cuenta:
-            df['Cuenta'] = df[col_cuenta].astype(str).str.strip().str.replace('.0', '', regex=False).str.zfill(10)
-        else:
-            st.error(f"No se encontró la columna 'Cuenta'. Las columnas detectadas son: {list(df.columns)}")
-            return None
+    df = pd.read_excel(archivo,
+        sheet_name='Reporte Cierre Diario',
+        header=1
+    )
+    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+    df = df.dropna(how='all')
+    df.columns = df.columns.str.strip()
 
-        # Procesamiento de fechas
-        cols_fecha = [
-            'Fecha creacion FFM', 'Fecha asignacion', 'Fecha transito',
-            'Fecha sitio', 'Fecha trabajo', 'Fecha termino'
-        ]
-        for col in cols_fecha:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
+    df['Cuenta'] = df['Cuenta'].astype(str).str.strip().str.replace('.0', '', regex=False).str.zfill(10)
 
-        return df
-
-    except Exception as e:
-        st.error(f"Error al procesar el archivo de cierre: {e}")
-        return None
     cols_fecha = [
         'Fecha creacion FFM', 'Fecha asignacion', 'Fecha transito',
         'Fecha sitio', 'Fecha trabajo', 'Fecha termino'
