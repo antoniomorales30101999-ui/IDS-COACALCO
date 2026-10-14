@@ -1,0 +1,346 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import io
+from components.auth import check_login
+
+st.set_page_config(page_title="Soporte vs Resolucion", layout="wide")
+
+if not check_login():
+    st.stop()
+
+st.title("Soporte vs Resolucion")
+st.markdown("---")
+
+@st.cache_data(ttl=300)
+def cargar_datos():
+    df_ids = pd.read_csv('ids.csv', dtype={'CUENTA': str})
+    df_ids['CUENTA'] = df_ids['CUENTA'].str.strip().str.replace('.0', '', regex=False).str.zfill(10)
+    df_ids = df_ids[df_ids['ESTATUS'] != 'Cancelado']
+    df_ids['FECHA CREACION'] = pd.to_datetime(df_ids['FECHA CREACION'])
+    df_ids['NUM_SEMANA'] = df_ids['FECHA CREACION'].dt.isocalendar().week
+    df_ids['DIA'] = df_ids['FECHA CREACION'].dt.date
+    df_ids['MES'] = df_ids['FECHA CREACION'].dt.strftime('%Y-%m')
+
+    df_cierre = pd.read_csv('reporteCierreDiario.csv', dtype={'Cuenta': str})
+    df_cierre['Cuenta'] = df_cierre['Cuenta'].str.strip().str.zfill(10)
+    df_cierre['Fecha termino'] = pd.to_datetime(df_cierre['Fecha termino'], errors='coerce')
+    df_cierre['NUM_SEMANA'] = df_cierre['Fecha termino'].dt.isocalendar().week
+    df_cierre['DIA'] = df_cierre['Fecha termino'].dt.date
+    df_cierre['MES'] = df_cierre['Fecha termino'].dt.strftime('%Y-%m')
+
+    return df_ids, df_cierre
+
+df_ids, df_cierre = cargar_datos()
+
+semanas_ids = set(df_ids['NUM_SEMANA'].dropna().unique())
+semanas_cierre = set(df_cierre['NUM_SEMANA'].dropna().unique())
+semanas = sorted(semanas_ids | semanas_cierre, reverse=True)
+
+sem_sel = st.selectbox('Semana:', options=semanas, index=0)
+
+df_ids_sem = df_ids[df_ids['NUM_SEMANA'] == sem_sel]
+df_cierre_sem = df_cierre[df_cierre['NUM_SEMANA'] == sem_sel]
+
+st.markdown("---")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    with st.container(border=True):
+        st.caption("Tickets ingresados")
+        st.markdown(f"**{len(df_ids_sem):,}**")
+with col2:
+    with st.container(border=True):
+        st.caption("Cierres realizados")
+        st.markdown(f"**{len(df_cierre_sem):,}**")
+with col3:
+    with st.container(border=True):
+        st.caption("Diferencia")
+        dif = len(df_cierre_sem) - len(df_ids_sem)
+        st.markdown(f"**{dif:+,}**")
+
+st.markdown("---")
+
+with st.container(border=True):
+    st.subheader("Ingreso vs Resolucion por dia")
+
+    df_ing_dia = df_ids_sem.groupby('DIA').size().reset_index(name='Tickets')
+    df_ing_dia['Tipo'] = 'Ingreso'
+
+    df_cie_dia = df_cierre_sem.groupby('DIA').size().reset_index(name='Tickets')
+    df_cie_dia['Tipo'] = 'Cierre'
+
+    df_comp = pd.concat([df_ing_dia, df_cie_dia])
+
+    fig = px.line(
+        df_comp, x='DIA', y='Tickets', color='Tipo', markers=True, text='Tickets',
+        color_discrete_map={'Ingreso': '#e63946', 'Cierre': '#1f77b4'}
+    )
+    fig.update_traces(line=dict(shape='spline', smoothing=1.3), marker=dict(size=8), textposition='top center')
+    fig.update_layout(height=350, xaxis_title='', yaxis_title='Tickets', legend=dict(orientation='h', y=1.1))
+    st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("---")
+
+with st.container(border=True):
+    st.subheader("Causas y soluciones aplicadas")
+
+    if df_cierre_sem.empty:
+        st.info("Sin cierres en esta semana.")
+    else:
+        causas = sorted(df_cierre_sem['Causa'].dropna().unique().tolist())
+        causa_sel = st.selectbox("Causa:", options=causas, key="causa_resultado")
+
+        df_causa = df_cierre_sem[df_cierre_sem['Causa'] == causa_sel]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption("Cierres con esta causa")
+            st.markdown(f"**{len(df_causa):,}**")
+        with col2:
+            st.caption("Cuentas afectadas")
+            st.markdown(f"**{df_causa['Cuenta'].nunique():,}**")
+
+        st.markdown("---")
+
+        df_soluciones = (
+            df_causa.dropna(subset=['Solucion'])
+            .groupby('Solucion')
+            .agg(
+                Cierres=('OS', 'nunique'),
+                Cuentas=('Cuenta', 'nunique'),
+            )
+            .reset_index()
+            .sort_values('Cierres', ascending=False)
+        )
+
+        if df_soluciones.empty:
+            st.info("Sin soluciones registradas para esta causa.")
+        else:
+            st.dataframe(
+                df_soluciones,
+                use_container_width=True,
+                height=250,
+                column_config={
+                    'Solucion': st.column_config.TextColumn('Solucion aplicada'),
+                    'Cierres': st.column_config.NumberColumn('Cierres', format="%d"),
+                    'Cuentas': st.column_config.NumberColumn('Cuentas', format="%d"),
+                }
+            )
+
+        st.markdown("---")
+        st.caption("Detalle de cuentas")
+        cols_det = ['Cuenta', 'OS', 'Cluster', 'Nombre tecnico', 'Fecha termino', 'Solucion', 'QR asignado']
+        cols_disp = [c for c in cols_det if c in df_causa.columns]
+        st.dataframe(
+            df_causa[cols_disp].sort_values('Fecha termino', ascending=False).reset_index(drop=True),
+            use_container_width=True,
+            height=350,
+            column_config={'Fecha termino': st.column_config.DatetimeColumn('Fecha termino', format="DD/MM/YYYY HH:mm")}
+        )
+
+st.markdown("---")
+
+with st.container(border=True):
+    st.subheader("Resumen: causas vs soluciones")
+
+    periodo = st.radio("Ver por:", options=['Dia', 'Semana', 'Mes'], horizontal=True, key="periodo_resumen")
+
+    if periodo == 'Dia':
+        opciones = sorted(df_ids['DIA'].dropna().unique(), reverse=True)
+        valor_sel = st.selectbox("Selecciona dia:", options=opciones, index=0, key="filtro_resumen")
+        df_periodo_ids = df_ids[df_ids['DIA'] == valor_sel]
+        df_periodo_cierre = df_cierre[df_cierre['DIA'] == valor_sel]
+        etiqueta = f"Dia {valor_sel}"
+    elif periodo == 'Semana':
+        opciones = sorted(df_ids['NUM_SEMANA'].dropna().unique(), reverse=True)
+        valor_sel = st.selectbox("Selecciona semana:", options=opciones, index=0, key="filtro_resumen")
+        df_periodo_ids = df_ids[df_ids['NUM_SEMANA'] == valor_sel]
+        df_periodo_cierre = df_cierre[df_cierre['NUM_SEMANA'] == valor_sel]
+        etiqueta = f"Semana {valor_sel}"
+    else:
+        opciones = sorted(df_ids['MES'].dropna().unique(), reverse=True)
+        valor_sel = st.selectbox("Selecciona mes:", options=opciones, index=0, key="filtro_resumen")
+        df_periodo_ids = df_ids[df_ids['MES'] == valor_sel]
+        df_periodo_cierre = df_cierre[df_cierre['MES'] == valor_sel]
+        etiqueta = f"Mes {valor_sel}"
+
+    col_izq, col_der = st.columns(2)
+
+    fig_causas = None
+    fig_sol = None
+
+    with col_izq:
+        st.markdown("**Causas del soporte ingresado**")
+        df_causas_dia = (
+            df_periodo_ids.groupby('NIVEL2')
+            .size()
+            .reset_index(name='Tickets')
+            .sort_values('Tickets', ascending=True)
+            .tail(10)
+        )
+        if df_causas_dia.empty:
+            st.info("Sin tickets ingresados en este periodo.")
+        else:
+            colores_causa = {
+                c: '#e63946' if i == len(df_causas_dia) - 1 else '#1f77b4'
+                for i, c in enumerate(df_causas_dia['NIVEL2'])
+            }
+            fig_causas = px.bar(
+                df_causas_dia, x='Tickets', y='NIVEL2', orientation='h',
+                text='Tickets', color='NIVEL2', color_discrete_map=colores_causa
+            )
+            fig_causas.update_traces(textposition='outside')
+            fig_causas.update_layout(
+                height=400, xaxis_title='Tickets', yaxis_title='',
+                showlegend=False, margin=dict(l=10, r=40, t=10, b=10)
+            )
+            st.plotly_chart(fig_causas, use_container_width=True)
+
+    with col_der:
+        st.markdown("**Soluciones aplicadas**")
+        df_sol_dia = (
+            df_periodo_cierre.dropna(subset=['Solucion'])
+            .groupby('Solucion')
+            .size()
+            .reset_index(name='Cierres')
+            .sort_values('Cierres', ascending=True)
+            .tail(10)
+        )
+        if df_sol_dia.empty:
+            st.info("Sin soluciones registradas en este periodo.")
+        else:
+            colores_sol = {
+                s: '#e63946' if i == len(df_sol_dia) - 1 else '#1f77b4'
+                for i, s in enumerate(df_sol_dia['Solucion'])
+            }
+            fig_sol = px.bar(
+                df_sol_dia, x='Cierres', y='Solucion', orientation='h',
+                text='Cierres', color='Solucion', color_discrete_map=colores_sol
+            )
+            fig_sol.update_traces(textposition='outside')
+            fig_sol.update_layout(
+                height=400, xaxis_title='Cierres', yaxis_title='',
+                showlegend=False, margin=dict(l=10, r=40, t=10, b=10)
+            )
+            st.plotly_chart(fig_sol, use_container_width=True)
+
+    st.markdown("---")
+
+    if fig_causas is not None or fig_sol is not None:
+        buffer_c = io.StringIO()
+        buffer_s = io.StringIO()
+        if fig_causas is not None:
+            fig_causas.write_html(buffer_c)
+        if fig_sol is not None:
+            fig_sol.write_html(buffer_s)
+
+        resumen_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset='utf-8'><title>Resumen {etiqueta}</title></head>
+<body style='font-family:Arial;padding:20px'>
+<h2>Resumen de soporte — {etiqueta}</h2>
+<h3>Causas del soporte ingresado</h3>
+{buffer_c.getvalue()}
+<h3>Soluciones aplicadas</h3>
+{buffer_s.getvalue()}
+</body>
+</html>"""
+
+        st.download_button(
+            label="📥 Descargar resumen (causas + soluciones)",
+            data=resumen_html,
+            file_name=f"resumen_causas_soluciones_{valor_sel}.html",
+            mime="text/html",
+            key="download_resumen_causas_sol"
+        )
+st.markdown("---")
+
+with st.container(border=True):
+    st.subheader("Reincidencia por Conectores")
+    st.caption("Cuentas con dos o mas cierres de conector en un lapso de 60 dias o menos")
+
+    df_conectores = df_cierre[df_cierre['Solucion'].str.contains('Conector', case=False, na=False)].copy()
+    df_conectores = df_conectores.dropna(subset=['Fecha termino']).sort_values(['Cuenta', 'Fecha termino'])
+
+    if df_conectores.empty:
+        st.info("Sin registros relacionados a conectores.")
+    else:
+        df_conectores['Dias_desde_anterior'] = (
+            df_conectores.groupby('Cuenta')['Fecha termino'].diff().dt.days
+        )
+        df_conectores['Reincidencia_60d'] = df_conectores['Dias_desde_anterior'] <= 60
+
+        cuentas_reincidentes = df_conectores[df_conectores['Reincidencia_60d']]['Cuenta'].unique()
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            with st.container(border=True):
+                st.caption("Cuentas con conectores")
+                st.markdown(f"**{df_conectores['Cuenta'].nunique():,}**")
+        with col2:
+            with st.container(border=True):
+                st.caption("Reincidentes (60 dias)")
+                st.markdown(f"**{len(cuentas_reincidentes):,}**")
+        with col3:
+            with st.container(border=True):
+                st.caption("% reincidencia")
+                pct = len(cuentas_reincidentes) / df_conectores['Cuenta'].nunique() * 100
+                st.markdown(f"**{pct:.1f}%**")
+
+        st.markdown("---")
+
+        if len(cuentas_reincidentes) == 0:
+            st.info("Sin reincidencias en 60 dias.")
+        else:
+            df_conectores['Tecnico_anterior'] = df_conectores.groupby('Cuenta')['Nombre tecnico'].shift(1)
+            df_fallas = df_conectores[df_conectores['Reincidencia_60d']].dropna(subset=['Tecnico_anterior'])
+
+            df_top_tecnicos = (
+                df_fallas.groupby('Tecnico_anterior')
+                .agg(
+                    Reincidencias=('OS', 'count'),
+                    Cuentas=('Cuenta', 'nunique')
+                )
+                .reset_index()
+                .sort_values('Reincidencias', ascending=True)
+                .tail(10)
+            )
+
+            colores_tec = {
+                t: '#e63946' if i == len(df_top_tecnicos) - 1 else '#1f77b4'
+                for i, t in enumerate(df_top_tecnicos['Tecnico_anterior'])
+            }
+
+            fig_tecnicos = px.bar(
+                df_top_tecnicos, x='Reincidencias', y='Tecnico_anterior', orientation='h',
+                text='Reincidencias', color='Tecnico_anterior', color_discrete_map=colores_tec
+            )
+            fig_tecnicos.update_traces(textposition='outside')
+            fig_tecnicos.update_layout(
+                height=80 + 10 * 35, xaxis_title='Reincidencias (60 dias)', yaxis_title='',
+                showlegend=False, margin=dict(l=10, r=40, t=10, b=10)
+            )
+            st.plotly_chart(fig_tecnicos, use_container_width=True)
+
+            st.markdown("---")
+            st.caption("Detalle de reincidencias por tecnico")
+            df_detalle_fallas = df_fallas[
+                ['Cuenta', 'Tecnico_anterior', 'Nombre tecnico', 'Fecha termino', 'Dias_desde_anterior', 'Cluster']
+            ].rename(columns={'Nombre tecnico': 'Tecnico_reincidencia'}).sort_values('Dias_desde_anterior')
+
+            st.dataframe(
+                df_detalle_fallas,
+                use_container_width=True,
+                height=300,
+                column_config={
+                    'Cuenta': st.column_config.TextColumn('Cuenta'),
+                    'Tecnico_anterior': st.column_config.TextColumn('Tecnico que instalo (audita)'),
+                    'Tecnico_reincidencia': st.column_config.TextColumn('Tecnico que reincidio'),
+                    'Fecha termino': st.column_config.DatetimeColumn('Fecha reincidencia', format="DD/MM/YYYY HH:mm"),
+                    'Dias_desde_anterior': st.column_config.NumberColumn('Dias', format="%d"),
+                    'Cluster': st.column_config.TextColumn('Cluster'),
+                }
+            )
+if st.button("Regresar al dashboard", key="regresar_resultado"):
+    st.switch_page('app.py')
