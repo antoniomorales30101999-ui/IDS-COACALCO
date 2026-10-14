@@ -86,7 +86,7 @@ def procesar_archivo(archivo):
     df['SEMANA'] = pd.to_datetime(df['FECHA CREACION']).dt.isocalendar().week
     return df
 
-# ── FUNCIÓN: LEER Y LIMPIAR REPORTE CIERRE DIARIO ─────
+# ——— FUNCIÓN: LEER Y LIMPIAR REPORTE CIERRE DIARIO ———
 def procesar_cierre(archivo):
     try:
         df = pd.read_excel(
@@ -98,7 +98,7 @@ def procesar_cierre(archivo):
         df = df.dropna(how='all')
         df.columns = df.columns.astype(str).str.strip()
         
-        # Buscar la columna 'Cuenta' sin importar mayúsculas/minúsculas
+        # Buscar la columna 'Cuenta' sin importar si está en mayúsculas o minúsculas
         col_cuenta = None
         for col in df.columns:
             if col.upper() == 'CUENTA':
@@ -111,6 +111,20 @@ def procesar_cierre(archivo):
             st.error(f"No se encontró la columna 'Cuenta'. Las columnas detectadas son: {list(df.columns)}")
             return None
 
+        # Procesamiento de fechas
+        cols_fecha = [
+            'Fecha creacion FFM', 'Fecha asignacion', 'Fecha transito',
+            'Fecha sitio', 'Fecha trabajo', 'Fecha termino'
+        ]
+        for col in cols_fecha:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
+
+        return df
+
+    except Exception as e:
+        st.error(f"Error al procesar el archivo de cierre: {e}")
+        return None
     cols_fecha = [
         'Fecha creacion FFM', 'Fecha asignacion', 'Fecha transito',
         'Fecha sitio', 'Fecha trabajo', 'Fecha termino'
