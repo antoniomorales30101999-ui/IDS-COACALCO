@@ -88,15 +88,28 @@ def procesar_archivo(archivo):
 
 # ── FUNCIÓN: LEER Y LIMPIAR REPORTE CIERRE DIARIO ─────
 def procesar_cierre(archivo):
-    df = pd.read_excel(archivo,
-        sheet_name=0,
-        header=1
-    )
-    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-    df = df.dropna(how='all')
-    df.columns = df.columns.str.strip()
-
-    df['Cuenta'] = df['Cuenta'].astype(str).str.strip().str.replace('.0', '', regex=False).str.zfill(10)
+    try:
+        df = pd.read_excel(
+            archivo,
+            sheet_name=0,
+            header=1
+        )
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        df = df.dropna(how='all')
+        df.columns = df.columns.astype(str).str.strip()
+        
+        # Buscar la columna 'Cuenta' sin importar mayúsculas/minúsculas
+        col_cuenta = None
+        for col in df.columns:
+            if col.upper() == 'CUENTA':
+                col_cuenta = col
+                break
+                
+        if col_cuenta:
+            df['Cuenta'] = df[col_cuenta].astype(str).str.strip().str.replace('.0', '', regex=False).str.zfill(10)
+        else:
+            st.error(f"No se encontró la columna 'Cuenta'. Las columnas detectadas son: {list(df.columns)}")
+            return None
 
     cols_fecha = [
         'Fecha creacion FFM', 'Fecha asignacion', 'Fecha transito',
