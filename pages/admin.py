@@ -89,7 +89,7 @@ def procesar_archivo(archivo):
 # ── FUNCIÓN: LEER Y LIMPIAR REPORTE CIERRE DIARIO ─────
 def procesar_cierre(archivo):
     df = pd.read_excel(archivo,
-        sheet_name='Reporte Cierre Diario',
+        sheet_name='sheet_name=0',
         header=1
     )
     df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
